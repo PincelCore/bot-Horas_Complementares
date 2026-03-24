@@ -2,6 +2,7 @@
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision = "0001_initial"
@@ -10,15 +11,68 @@ branch_labels = None
 depends_on = None
 
 
-submission_status = sa.Enum("DRAFT", "SUBMITTED", "NEEDS_REVIEW", "APPROVED_ESTIMATE", "REJECTED_ESTIMATE", name="submissionstatus")
-rule_type = sa.Enum("PER_UNIT", "DECLARED_HOURS", "FIXED_HOURS", "PERCENTAGE_OF_DECLARED", name="ruletype")
-quantity_unit = sa.Enum("MONTH", "EVENT", "PRESENTATION", "STAGE", "AWARD", "DAY", "SEMESTER", "COURSE", name="quantityunit")
+submission_status = postgresql.ENUM(
+    "DRAFT",
+    "SUBMITTED",
+    "NEEDS_REVIEW",
+    "APPROVED_ESTIMATE",
+    "REJECTED_ESTIMATE",
+    name="submissionstatus",
+    create_type=False,
+)
+rule_type = postgresql.ENUM(
+    "PER_UNIT",
+    "DECLARED_HOURS",
+    "FIXED_HOURS",
+    "PERCENTAGE_OF_DECLARED",
+    name="ruletype",
+    create_type=False,
+)
+quantity_unit = postgresql.ENUM(
+    "MONTH",
+    "EVENT",
+    "PRESENTATION",
+    "STAGE",
+    "AWARD",
+    "DAY",
+    "SEMESTER",
+    "COURSE",
+    name="quantityunit",
+    create_type=False,
+)
+
+submission_status_create = postgresql.ENUM(
+    "DRAFT",
+    "SUBMITTED",
+    "NEEDS_REVIEW",
+    "APPROVED_ESTIMATE",
+    "REJECTED_ESTIMATE",
+    name="submissionstatus",
+)
+rule_type_create = postgresql.ENUM(
+    "PER_UNIT",
+    "DECLARED_HOURS",
+    "FIXED_HOURS",
+    "PERCENTAGE_OF_DECLARED",
+    name="ruletype",
+)
+quantity_unit_create = postgresql.ENUM(
+    "MONTH",
+    "EVENT",
+    "PRESENTATION",
+    "STAGE",
+    "AWARD",
+    "DAY",
+    "SEMESTER",
+    "COURSE",
+    name="quantityunit",
+)
 
 
 def upgrade() -> None:
-    submission_status.create(op.get_bind(), checkfirst=True)
-    rule_type.create(op.get_bind(), checkfirst=True)
-    quantity_unit.create(op.get_bind(), checkfirst=True)
+    submission_status_create.create(op.get_bind(), checkfirst=True)
+    rule_type_create.create(op.get_bind(), checkfirst=True)
+    quantity_unit_create.create(op.get_bind(), checkfirst=True)
     op.create_table(
         "users",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -122,6 +176,6 @@ def downgrade() -> None:
     op.drop_table("rules")
     op.drop_table("activity_categories")
     op.drop_table("users")
-    quantity_unit.drop(op.get_bind(), checkfirst=True)
-    rule_type.drop(op.get_bind(), checkfirst=True)
-    submission_status.drop(op.get_bind(), checkfirst=True)
+    quantity_unit_create.drop(op.get_bind(), checkfirst=True)
+    rule_type_create.drop(op.get_bind(), checkfirst=True)
+    submission_status_create.drop(op.get_bind(), checkfirst=True)

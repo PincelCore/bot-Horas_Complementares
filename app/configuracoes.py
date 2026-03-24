@@ -32,6 +32,15 @@ class Configuracoes(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalizar_database_url(cls, value: str) -> str:
+        if value.startswith("postgresql://"):
+            return value.replace("postgresql://", "postgresql+psycopg://", 1)
+        if value.startswith("postgres://"):
+            return value.replace("postgres://", "postgresql+psycopg://", 1)
+        return value
+
 
 @lru_cache
 def pegar_configuracoes() -> Configuracoes:
