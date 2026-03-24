@@ -1,0 +1,115 @@
+from io import BytesIO
+
+
+def pegar_categoria(cliente_api, codigo: str) -> dict:
+    resposta = cliente_api.get("/categories")
+    categorias = resposta.json()
+    return next(item for item in categorias if item["code"] == codigo)
+
+
+def test_cria_submissao_envia_comprovante_e_fecha_resumo(client):
+    resposta_usuario = client.post("/users", json={"full_name": "Davi"})
+    usuario_id = resposta_usuario.json()["id"]
+    categoria = pegar_categoria(client, "ESTAGIO")
+    assert categoria["max_hours"] == 54
+
+    resposta_submissao = client.post(
+        "/submissions",
+        json={
+            "user_id": usuario_id,
+            "category_code": categoria["code"],
+            "title": "Estagio em laboratorio",
+            "description": "Estagio de 4 meses",
+            "declared_quantity": 4,
+        },
+    )
+    assert resposta_submissao.status_code == 201
+    submissao_id = resposta_submissao.json()["id"]
+    assert resposta_submissao.json()["status"] == "needs_review"
+
+    resposta_upload = client.post(
+        f"/submissions/{submissao_id}/evidences",
+        files={"file": ("certificado.pdf", BytesIO(b"fake pdf content"), "application/pdf")},
+    )
+    assert resposta_upload.status_code == 200
+    assert resposta_upload.json()["status"] == "approved_estimate"
+    assert resposta_upload.json()["estimated_hours"] == 36
+
+    resposta_resumo = client.get(f"/users/{usuario_id}/summary")
+    assert resposta_resumo.status_code == 200
+    assert resposta_resumo.json()["total_estimated_hours"] == 36
+    assert resposta_resumo.json()["remaining_hours"] == 54
+
+
+def test_regra_percentual_para_curso_externo(client):
+    resposta_usuario = client.post("/users", json={"full_name": "Davi"})
+    usuario_id = resposta_usuario.json()["id"]
+    categoria = pegar_categoria(client, "CURSOS_CC_EXTERNOS")
+
+    resposta_submissao = client.post(
+        "/submissions",
+        json={
+            "user_id": usuario_id,
+            "category_code": categoria["code"],
+            "title": "Curso externo",
+            "description": "Curso de 40h",
+            "declared_hours": 40,
+        },
+    )
+    submissao_id = resposta_submissao.json()["id"]
+
+    resposta_upload = client.post(
+        f"/submissions/{submissao_id}/evidences",
+        files={"file": ("certificado.pdf", BytesIO(b"fake pdf content"), "application/pdf")},
+    )
+    assert resposta_upload.status_code == 200
+    assert resposta_upload.json()["estimated_hours"] == 20
+
+
+def test_rejeita_tipo_de_arquivo_invalido(client):
+    resposta_usuario = client.post("/users", json={"full_name": "Davi"})
+    usuario_id = resposta_usuario.json()["id"]
+    categoria = pegar_categoria(client, "ESTAGIO")
+    resposta_submissao = client.post(
+        "/submissions",
+        json={"user_id": usuario_id, "category_code": categoria["code"], "title": "Estagio", "declared_quantity": 4},
+    )
+    submissao_id = resposta_submissao.json()["id"]
+
+    resposta_upload = client.post(
+        f"/submissions/{submissao_id}/evidences",
+        files={"file": ("notes.txt", BytesIO(b"text"), "text/plain")},
+    )
+    assert resposta_upload.status_code == 400
+
+
+def test_remover_comprovante_recalcula_submissao(client):
+    resposta_usuario = client.post("/users", json={"full_name": "Davi"})
+    usuario_id = resposta_usuario.json()["id"]
+    categoria = pegar_categoria(client, "ESTAGIO")
+
+    resposta_submissao = client.post(
+        "/submissions",
+        json={
+            "user_id": usuario_id,
+            "category_code": categoria["code"],
+            "title": "Estagio",
+            "description": "Estagio de 4 meses",
+            "declared_quantity": 4,
+        },
+    )
+    submissao_id = resposta_submissao.json()["id"]
+
+    resposta_upload = client.post(
+        f"/submissions/{submissao_id}/evidences",
+        files={"file": ("certificado.pdf", BytesIO(b"fake pdf content"), "application/pdf")},
+    )
+    comprovante_id = resposta_upload.json()["evidences"][0]["id"]
+
+    resposta_remocao = client.delete(f"/submissions/{submissao_id}/evidences/{comprovante_id}")
+
+    assert resposta_remocao.status_code == 200
+    assert resposta_remocao.json()["status"] == "needs_review"
+    assert resposta_remocao.json()["estimated_hours"] is None
+    assert resposta_remocao.json()["evidences"] == []
+
