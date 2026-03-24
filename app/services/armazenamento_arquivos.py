@@ -1,5 +1,6 @@
 import hashlib
 import io
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -9,11 +10,19 @@ from app.configuracoes import pegar_configuracoes
 from app.services.excecoes import ErroDominio
 
 
+@dataclass
+class ArquivoPreparado:
+    nome_interno: str
+    caminho_storage: str
+    hash_arquivo: str
+    conteudo: bytes
+
+
 class ServicoArquivos:
     def __init__(self) -> None:
         self.configuracoes = pegar_configuracoes()
 
-    def salvar(self, arquivo: UploadFile) -> tuple[str, str, str]:
+    def salvar(self, arquivo: UploadFile) -> ArquivoPreparado:
         conteudo = arquivo.file.read()
         return self.salvar_bytes(
             nome_arquivo=arquivo.filename or "documento",
@@ -21,10 +30,10 @@ class ServicoArquivos:
             conteudo=conteudo,
         )
 
-    def save(self, upload: UploadFile) -> tuple[str, str, str]:
+    def save(self, upload: UploadFile) -> ArquivoPreparado:
         return self.salvar(upload)
 
-    def salvar_bytes(self, *, nome_arquivo: str, tipo_mime: str, conteudo: bytes) -> tuple[str, str, str]:
+    def salvar_bytes(self, *, nome_arquivo: str, tipo_mime: str, conteudo: bytes) -> ArquivoPreparado:
         limite_bytes = self.configuracoes.max_upload_size_mb * 1024 * 1024
         if len(conteudo) > limite_bytes:
             raise ErroDominio("Arquivo excede o limite configurado.")
@@ -33,12 +42,15 @@ class ServicoArquivos:
 
         sufixo = Path(nome_arquivo or "documento").suffix
         nome_interno = f"{uuid4().hex}{sufixo}"
-        caminho_destino = self.configuracoes.storage_dir / nome_interno
-        caminho_destino.write_bytes(conteudo)
         hash_arquivo = hashlib.sha256(conteudo).hexdigest()
-        return nome_interno, str(caminho_destino.resolve()), hash_arquivo
+        return ArquivoPreparado(
+            nome_interno=nome_interno,
+            caminho_storage=f"db://evidences/{nome_interno}",
+            hash_arquivo=hash_arquivo,
+            conteudo=conteudo,
+        )
 
-    def save_bytes(self, *, filename: str, mime_type: str, content: bytes) -> tuple[str, str, str]:
+    def save_bytes(self, *, filename: str, mime_type: str, content: bytes) -> ArquivoPreparado:
         return self.salvar_bytes(nome_arquivo=filename, tipo_mime=mime_type, conteudo=content)
 
     @staticmethod
@@ -51,6 +63,8 @@ class ServicoArquivos:
 
     @staticmethod
     def remover(caminho_salvo: str) -> None:
+        if caminho_salvo.startswith("db://"):
+            return
         caminho = Path(caminho_salvo)
         if caminho.exists():
             caminho.unlink()

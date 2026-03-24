@@ -1,6 +1,6 @@
 from typing import Optional
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import ForeignKey, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -17,6 +17,7 @@ class Comprovante(CamposTempo, Base):
     mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
     file_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    file_content: Mapped[Optional[bytes]] = mapped_column(LargeBinary)
     extracted_text: Mapped[Optional[str]] = mapped_column(Text)
 
     submissions = relationship("SubmissaoComprovante", back_populates="evidence", cascade="all, delete-orphan")

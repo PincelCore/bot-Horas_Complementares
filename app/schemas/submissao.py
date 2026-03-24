@@ -20,7 +20,6 @@ class ComprovanteLeitura(BaseModel):
     original_filename: str
     mime_type: str
     file_hash: str
-    storage_path: str
 
     model_config = {"from_attributes": True}
 

@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
@@ -62,20 +60,23 @@ class ServicoSubmissoes:
         if not submissao:
             raise ErroDominio("Submissao nao encontrada.")
 
-        nome_interno, caminho_storage, hash_arquivo = self.servico_arquivos.salvar(arquivo)
-        comprovante_existente = self.repositorio_comprovantes.pegar_por_hash(hash_arquivo)
+        arquivo_preparado = self.servico_arquivos.salvar(arquivo)
+        comprovante_existente = self.repositorio_comprovantes.pegar_por_hash(arquivo_preparado.hash_arquivo)
         if comprovante_existente:
-            if caminho_storage != comprovante_existente.storage_path and Path(caminho_storage).exists():
-                Path(caminho_storage).unlink()
+            if not comprovante_existente.file_content:
+                comprovante_existente.file_content = arquivo_preparado.conteudo
+                comprovante_existente.storage_path = arquivo_preparado.caminho_storage
+                comprovante_existente.stored_filename = arquivo_preparado.nome_interno
             comprovante = comprovante_existente
         else:
             comprovante = Comprovante(
                 user_id=submissao.user_id,
-                original_filename=arquivo.filename or nome_interno,
-                stored_filename=nome_interno,
+                original_filename=arquivo.filename or arquivo_preparado.nome_interno,
+                stored_filename=arquivo_preparado.nome_interno,
                 mime_type=arquivo.content_type or "application/octet-stream",
-                file_hash=hash_arquivo,
-                storage_path=caminho_storage,
+                file_hash=arquivo_preparado.hash_arquivo,
+                storage_path=arquivo_preparado.caminho_storage,
+                file_content=arquivo_preparado.conteudo,
             )
             self.repositorio_comprovantes.criar(comprovante)
 
@@ -137,7 +138,6 @@ class ServicoSubmissoes:
         comprovante = self.repositorio_comprovantes.pegar(comprovante_id)
         self.repositorio_comprovantes.remover_vinculo(vinculo)
         if comprovante and self.repositorio_comprovantes.contar_vinculos(comprovante_id) == 0:
-            self.servico_arquivos.remover(comprovante.storage_path)
             self.repositorio_comprovantes.remover(comprovante)
 
         self.repositorio_auditoria.registrar(
