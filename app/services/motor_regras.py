@@ -29,24 +29,31 @@ class MotorDeRegras:
             return ResultadoAvaliacaoRegra(None, StatusSubmissao.PRECISA_REVISAO, "Mais de uma regra encontrada para a categoria.")
 
         regra = regras[0]
+        observacoes: list[str] = []
         if regra.requires_evidence and quantidade_comprovantes == 0:
             return ResultadoAvaliacaoRegra(None, StatusSubmissao.PRECISA_REVISAO, "A categoria exige comprovante.")
         if regra.rule_type == TipoRegra.POR_UNIDADE:
             if submissao.declared_quantity is None:
-                return ResultadoAvaliacaoRegra(None, StatusSubmissao.PRECISA_REVISAO, "Quantidade da atividade ausente para calculo.")
+                return ResultadoAvaliacaoRegra(None, StatusSubmissao.PRECISA_REVISAO, "Quantidade da atividade ausente para cálculo.")
             if regra.minimum_quantity is not None and submissao.declared_quantity < regra.minimum_quantity:
                 return ResultadoAvaliacaoRegra(
                     0.0,
                     StatusSubmissao.ESTIMATIVA_REJEITADA,
-                    f"Atividade abaixo do minimo exigido ({regra.minimum_quantity:g} {self._rotulo_unidade(regra)}).",
+                    f"Atividade abaixo do mínimo exigido ({regra.minimum_quantity:g} {self._rotulo_unidade(regra)}).",
                 )
         if regra.rule_type == TipoRegra.PERCENTUAL_DAS_HORAS and submissao.declared_hours is None:
-            return ResultadoAvaliacaoRegra(None, StatusSubmissao.PRECISA_REVISAO, "Carga horaria base ausente para calculo.")
+            return ResultadoAvaliacaoRegra(None, StatusSubmissao.PRECISA_REVISAO, "Carga horária base ausente para cálculo.")
         if submissao.declared_hours is None and regra.rule_type == TipoRegra.HORAS_DECLARADAS:
-            return ResultadoAvaliacaoRegra(None, StatusSubmissao.PRECISA_REVISAO, "Horas declaradas ausentes para calculo.")
+            return ResultadoAvaliacaoRegra(None, StatusSubmissao.PRECISA_REVISAO, "Horas declaradas ausentes para cálculo.")
 
-        horas_estimadas = self._calcular(regra, submissao.declared_quantity, submissao.declared_hours)
+        horas_brutas = self._calcular(regra, submissao.declared_quantity, submissao.declared_hours)
+        horas_estimadas = horas_brutas
         if regra.max_hours_per_item is not None:
+            if horas_estimadas > regra.max_hours_per_item:
+                observacoes.append(
+                    f"A conta inicial deu {self._formatar_horas(horas_estimadas)}, mas cada lançamento dessa categoria vai até "
+                    f"{self._formatar_horas(regra.max_hours_per_item)}."
+                )
             horas_estimadas = min(horas_estimadas, regra.max_hours_per_item)
 
         horas_ja_alocadas = self.repositorio_submissoes.total_estimated_hours_for_user_category(
@@ -56,24 +63,36 @@ class MotorDeRegras:
         )
         if regra.max_hours_per_category is not None:
             horas_restantes = max(regra.max_hours_per_category - horas_ja_alocadas, 0.0)
+            if horas_estimadas > horas_restantes:
+                if horas_ja_alocadas > 0:
+                    observacoes.append(
+                        f"A conta inicial deu {self._formatar_horas(horas_estimadas)}, mas você já tinha "
+                        f"{self._formatar_horas(horas_ja_alocadas)} nessa categoria e sobravam só "
+                        f"{self._formatar_horas(horas_restantes)} do teto oficial de {self._formatar_horas(regra.max_hours_per_category)}."
+                    )
+                else:
+                    observacoes.append(
+                        f"A conta inicial deu {self._formatar_horas(horas_estimadas)}, mas o teto oficial dessa categoria é "
+                        f"{self._formatar_horas(regra.max_hours_per_category)}."
+                    )
             horas_estimadas = min(horas_estimadas, horas_restantes)
 
         if horas_estimadas <= 0:
             return ResultadoAvaliacaoRegra(
                 0.0,
                 StatusSubmissao.ESTIMATIVA_REJEITADA,
-                "Sem horas restantes disponiveis para a categoria.",
+                "Sem horas restantes disponíveis para a categoria.",
             )
 
-        observacoes = ["Estimativa calculada com sucesso."]
+        observacoes.insert(0, "Estimativa calculada com sucesso.")
         if regra.minimum_quantity is not None and regra.rule_type == TipoRegra.POR_UNIDADE:
-            observacoes.append(f"Minimo oficial considerado: {regra.minimum_quantity:g} {self._rotulo_unidade(regra)}.")
+            observacoes.append(f"Mínimo oficial considerado: {regra.minimum_quantity:g} {self._rotulo_unidade(regra)}.")
         if regra.special_conditions:
-            observacoes.append(f"Conferir condicoes oficiais: {regra.special_conditions}")
+            observacoes.append(f"Conferir condições oficiais: {regra.special_conditions}")
         if regra.documentation_required:
-            observacoes.append(f"Documentacao esperada: {regra.documentation_required}")
+            observacoes.append(f"Documentação esperada: {regra.documentation_required}")
         if regra.requires_manual_review:
-            observacoes.append("Esta categoria depende de conferencia manual adicional pela regra oficial.")
+            observacoes.append("Esta categoria depende de conferência manual adicional pela regra oficial.")
         return ResultadoAvaliacaoRegra(horas_estimadas, StatusSubmissao.ESTIMATIVA_APROVADA, " ".join(observacoes))
 
     def evaluate(self, submission: Submissao, rules: list[Regra], evidence_count: int) -> ResultadoAvaliacaoRegra:
@@ -98,15 +117,21 @@ class MotorDeRegras:
         if regra.quantity_unit is None:
             return "unidades"
         return {
-            "month": "mes(es)",
+            "month": "mês(es)",
             "event": "evento(s)",
-            "presentation": "apresentacao(oes)",
+            "presentation": "apresentação(ões)",
             "stage": "etapa(s)",
-            "award": "premiacao(oes)",
+            "award": "premiação(ões)",
             "day": "dia(s)",
             "semester": "semestre(s)",
             "course": "curso(s)",
         }.get(regra.quantity_unit.value, "unidades")
+
+    @staticmethod
+    def _formatar_horas(valor: float | None) -> str:
+        if valor is None:
+            return "0h"
+        return f"{valor:.2f}h".replace(".", ",")
 
 
 RuleEvaluationResult = ResultadoAvaliacaoRegra
