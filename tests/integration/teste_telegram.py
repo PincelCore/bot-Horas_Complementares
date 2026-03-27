@@ -6,6 +6,15 @@ def pegar_categoria(cliente_api, codigo: str) -> dict:
     return next(item for item in resposta.json() if item["code"] == codigo)
 
 
+def pdf_certificado_bytes(nome: str = "Davi") -> bytes:
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<<>>\nstream\n"
+        + f"(CERTIFICADO de participacao. {nome}. carga horaria 12 horas. evento academico UFRJ.)\n".encode("latin-1")
+        + b"endstream\nendobj\n%%EOF"
+    )
+
+
 def test_fluxo_do_telegram_com_botoes_e_validacoes(client, monkeypatch):
     categoria = pegar_categoria(client, "ESTAGIO")
     mensagens_enviadas: list[dict] = []
@@ -163,7 +172,7 @@ def test_telegram_explica_teto_quando_categoria_limita_horas(client, monkeypatch
     monkeypatch.setattr(ClienteTelegram, "enviar_mensagem", lambda self, chat_id, texto, marcacao=None: None)
     monkeypatch.setattr(ClienteTelegram, "responder_callback", lambda self, callback_id, texto=None: None)
     monkeypatch.setattr(ClienteTelegram, "buscar_arquivo", lambda self, file_id: {"file_path": f"docs/{file_id}.pdf"})
-    monkeypatch.setattr(ClienteTelegram, "baixar_arquivo", lambda self, caminho_arquivo: b"fake pdf content")
+    monkeypatch.setattr(ClienteTelegram, "baixar_arquivo", lambda self, caminho_arquivo: pdf_certificado_bytes())
 
     client.post("/telegram/webhook", json={"message": {"chat": {"id": 779}, "from": {"first_name": "Davi"}, "text": "/start"}})
     client.post("/telegram/webhook", json={"message": {"chat": {"id": 779}, "text": "Nova atividade"}})
@@ -192,7 +201,7 @@ def test_telegram_explica_teto_quando_categoria_limita_horas(client, monkeypatch
     )
 
     assert "teto oficial dessa categoria é 18,00h" in resposta_upload.json()["message"].lower()
-    assert "valor informado: 10 evento(s)" in resposta_upload.json()["message"].lower()
+    assert "valor informado: 10 eventos" in resposta_upload.json()["message"].lower()
 
 
 def test_telegram_exige_start(client, monkeypatch):
@@ -213,7 +222,7 @@ def test_upload_listagem_e_remocao_por_botoes(client, monkeypatch):
     monkeypatch.setattr(ClienteTelegram, "enviar_mensagem", falso_enviar)
     monkeypatch.setattr(ClienteTelegram, "responder_callback", lambda self, callback_id, texto=None: None)
     monkeypatch.setattr(ClienteTelegram, "buscar_arquivo", lambda self, file_id: {"file_path": f"docs/{file_id}.pdf"})
-    monkeypatch.setattr(ClienteTelegram, "baixar_arquivo", lambda self, caminho_arquivo: b"fake pdf content")
+    monkeypatch.setattr(ClienteTelegram, "baixar_arquivo", lambda self, caminho_arquivo: pdf_certificado_bytes())
 
     client.post("/telegram/webhook", json={"message": {"chat": {"id": 700}, "from": {"first_name": "Davi"}, "text": "/start"}})
     client.post("/telegram/webhook", json={"message": {"chat": {"id": 700}, "text": "Nova atividade"}})
@@ -254,6 +263,11 @@ def test_upload_listagem_e_remocao_por_botoes(client, monkeypatch):
         for linha in mensagens_enviadas[-1]["marcacao"]["inline_keyboard"]
         for botao in linha
     )
+    assert any(
+        botao["text"] == "Excluir atividade"
+        for linha in mensagens_enviadas[-1]["marcacao"]["inline_keyboard"]
+        for botao in linha
+    )
 
     resposta_comprovantes = client.post(
         "/telegram/webhook",
@@ -278,4 +292,114 @@ def test_upload_listagem_e_remocao_por_botoes(client, monkeypatch):
         },
     )
     assert "Removi esse comprovante" in resposta_remocao.json()["message"]
+
+
+def test_trocar_categoria_descarta_rascunho_temporario(client, monkeypatch):
+    categoria_estagio = pegar_categoria(client, "ESTAGIO")
+    categoria_evento = pegar_categoria(client, "OUVINTE_EVENTOS")
+
+    monkeypatch.setattr(ClienteTelegram, "enviar_mensagem", lambda self, chat_id, texto, marcacao=None: None)
+    monkeypatch.setattr(ClienteTelegram, "responder_callback", lambda self, callback_id, texto=None: None)
+
+    client.post("/telegram/webhook", json={"message": {"chat": {"id": 782}, "from": {"first_name": "Davi"}, "text": "/start"}})
+    client.post("/telegram/webhook", json={"message": {"chat": {"id": 782}, "text": "Nova atividade"}})
+    client.post(
+        "/telegram/webhook",
+        json={
+            "callback_query": {
+                "id": "cb-cat-1",
+                "data": f"categoria:{categoria_estagio['code']}",
+                "message": {"chat": {"id": 782}},
+            }
+        },
+    )
+
+    resposta_segunda_categoria = client.post(
+        "/telegram/webhook",
+        json={
+            "callback_query": {
+                "id": "cb-cat-2",
+                "data": f"categoria:{categoria_evento['code']}",
+                "message": {"chat": {"id": 782}},
+            }
+        },
+    )
+
+    submissoes = client.get("/users/1/submissions").json()
+    assert "Categoria escolhida" in resposta_segunda_categoria.json()["message"]
+    assert len(submissoes) == 1
+    assert submissoes[0]["category_code"] == "OUVINTE_EVENTOS"
+
+
+def test_telegram_exclui_submissao_por_botao(client, monkeypatch):
+    categoria = pegar_categoria(client, "ESTAGIO")
+    mensagens_enviadas: list[dict] = []
+
+    def falso_enviar(self, chat_id, texto, marcacao=None):
+        mensagens_enviadas.append({"chat_id": chat_id, "texto": texto, "marcacao": marcacao})
+
+    monkeypatch.setattr(ClienteTelegram, "enviar_mensagem", falso_enviar)
+    monkeypatch.setattr(ClienteTelegram, "responder_callback", lambda self, callback_id, texto=None: None)
+    monkeypatch.setattr(ClienteTelegram, "buscar_arquivo", lambda self, file_id: {"file_path": f"docs/{file_id}.pdf"})
+    monkeypatch.setattr(ClienteTelegram, "baixar_arquivo", lambda self, caminho_arquivo: pdf_certificado_bytes())
+
+    client.post("/telegram/webhook", json={"message": {"chat": {"id": 783}, "from": {"first_name": "Davi"}, "text": "/start"}})
+    client.post("/telegram/webhook", json={"message": {"chat": {"id": 783}, "text": "Nova atividade"}})
+    client.post(
+        "/telegram/webhook",
+        json={
+            "callback_query": {"id": "cb-del-1", "data": f"categoria:{categoria['code']}", "message": {"chat": {"id": 783}}}
+        },
+    )
+    client.post("/telegram/webhook", json={"message": {"chat": {"id": 783}, "text": "Estagio teste"}})
+    client.post("/telegram/webhook", json={"message": {"chat": {"id": 783}, "text": "4"}})
+    client.post(
+        "/telegram/webhook",
+        json={
+            "message": {
+                "chat": {"id": 783},
+                "document": {
+                    "file_id": "delete123",
+                    "file_unique_id": "delete123",
+                    "file_name": "delete.pdf",
+                    "mime_type": "application/pdf",
+                },
+            }
+        },
+    )
+    client.post(
+        "/telegram/webhook",
+        json={"callback_query": {"id": "cb-del-2", "data": "finalizar_envio", "message": {"chat": {"id": 783}}}},
+    )
+
+    resposta_confirmacao = client.post(
+        "/telegram/webhook",
+        json={
+            "callback_query": {
+                "id": "cb-del-3",
+                "data": "confirmar_exclusao:1",
+                "message": {"chat": {"id": 783}},
+            }
+        },
+    )
+    assert "Confirmar exclusão" in resposta_confirmacao.json()["message"]
+    assert any(
+        botao["callback_data"] == "excluir_atividade:1"
+        for linha in mensagens_enviadas[-1]["marcacao"]["inline_keyboard"]
+        for botao in linha
+    )
+
+    resposta_exclusao = client.post(
+        "/telegram/webhook",
+        json={
+            "callback_query": {
+                "id": "cb-del-4",
+                "data": "excluir_atividade:1",
+                "message": {"chat": {"id": 783}},
+            }
+        },
+    )
+
+    assert "Atividade removida" in resposta_exclusao.json()["message"]
+    assert client.get("/users/1/submissions").json() == []
 

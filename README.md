@@ -21,6 +21,9 @@ O projeto sobe com seed oficial do BCC/UFRJ `2022/2` para categorias, limites e 
 - Upload de comprovantes com armazenamento em disco
 - Upload de comprovantes direto pelo Telegram
 - Remocao de comprovantes pela API e pelo Telegram
+- Remocao de submissoes pela API e pelo Telegram
+- Triagem minima de documentos recebidos para reduzir anexos errados
+- Limites simples contra excesso de comprovantes e uploads por usuario
 - Resumo consolidado por categoria e status
 - Webhook Telegram com comandos e botoes clicaveis
 
@@ -47,6 +50,17 @@ Copy-Item .env.example .env
 python -m alembic upgrade head
 python -m uvicorn app.principal:app --reload
 ```
+
+## Rodar local com Telegram
+
+Para desenvolvimento local sem HTTPS publico, use polling:
+
+```env
+TELEGRAM_MODE=polling
+TELEGRAM_AUTO_SET_WEBHOOK=false
+```
+
+Nesse modo o proprio processo da aplicacao consulta o Telegram com `getUpdates`, entao funciona em maquina local sem webhook publico.
 
 ## Testes
 
@@ -75,24 +89,32 @@ Depois de subir a API, abra:
 - `Nova atividade` abre um fluxo guiado com botoes
 - o bot pede categoria por botao, depois titulo e um numero da atividade
 - depois disso, o usuario envia PDF ou imagem do comprovante direto no chat
+- antes de anexar, o sistema faz uma triagem minima para detectar arquivo claramente errado
 - `Comprovantes` lista os anexos da submissao ativa
 - a remocao de comprovantes acontece por botao inline
+- a remocao de submissao acontece por botao inline com confirmacao
 - `Finalizar envio` conclui a submissao e consolida a estimativa
 
 ## Deploy com PostgreSQL
 
-No Railway ou em outro ambiente de deploy, troque so a `DATABASE_URL` para a conexao real do Postgres:
+No Railway ou em outro ambiente de deploy, troque a `DATABASE_URL` para a conexao real do Postgres e use storage S3 compativel para os arquivos:
 
 ```env
 DATABASE_URL=postgresql+psycopg://USUARIO:SENHA@HOST:PORTA/BANCO
+STORAGE_BACKEND=s3
+STORAGE_BUCKET=horas-complementares
+STORAGE_REGION=auto
+STORAGE_ENDPOINT_URL=https://SEU_ACCOUNT_ID.r2.cloudflarestorage.com
+STORAGE_ACCESS_KEY_ID=SUA_ACCESS_KEY
+STORAGE_SECRET_ACCESS_KEY=SUA_SECRET_KEY
 ```
 
-O resto pode continuar igual, ajustando o `STORAGE_DIR` para um caminho persistente do servidor.
+Se voce usar Cloudflare R2, o endpoint continua S3 compativel. O `STORAGE_DIR` local continua util para desenvolvimento com `STORAGE_BACKEND=filesystem`.
 
 Resumo pratico:
 
 - local: `.env` com SQLite
-- deploy: variaveis do provedor com PostgreSQL
+- deploy: variaveis do provedor com PostgreSQL + R2/S3
 - `.env.example`: base pronta para desenvolvimento local
 - `.env.railway.example`: referencia para preencher as variaveis do Railway
 

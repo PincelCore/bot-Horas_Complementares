@@ -52,9 +52,15 @@ class RepositorioSubmissoes:
     def get(self, submission_id: int) -> Submissao | None:
         return self.pegar(submission_id)
 
+    def remover(self, submissao: Submissao) -> None:
+        self.db.delete(submissao)
+
     def list_by_user(self, user_id: int) -> list[Submissao]:
         return self.listar_por_usuario(user_id)
 
     def total_estimated_hours_for_user_category(self, user_id: int, category_id: int, exclude_submission_id: int | None = None) -> float:
         return self.somar_horas_estimadas_do_usuario_na_categoria(user_id, category_id, exclude_submission_id)
+
+    def delete(self, submission: Submissao) -> None:
+        self.remover(submission)
 

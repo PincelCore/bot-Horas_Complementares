@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import re
 
 from sqlalchemy.orm import Session
@@ -129,6 +130,18 @@ class ServicoTelegram:
             self._enviar_texto(chat_id, resposta, marcacao_inline=self._acoes_submissao_inline(usuario))
             return resposta
 
+        if dados.startswith("confirmar_exclusao:"):
+            submissao_id = int(dados.split(":", 1)[1])
+            resposta, marcacao_inline = self._pedir_confirmacao_exclusao(usuario, submissao_id)
+            self._enviar_texto(chat_id, resposta, marcacao_inline=marcacao_inline)
+            return resposta
+
+        if dados.startswith("excluir_atividade:"):
+            submissao_id = int(dados.split(":", 1)[1])
+            resposta, marcacao_inline = self._excluir_submissao_por_botao(usuario, submissao_id)
+            self._enviar_texto(chat_id, resposta, marcacao_inline=marcacao_inline)
+            return resposta
+
         if dados == "ver_comprovantes":
             resposta, marcacao_inline = self._listar_comprovantes(usuario)
             self._enviar_texto(chat_id, resposta, marcacao_inline=marcacao_inline)
@@ -185,21 +198,23 @@ class ServicoTelegram:
                 )
             )
         return (
-            f"Fechou, {usuario.full_name}.\n\n"
+            f"<b>Fechou, {self._esc(usuario.full_name)}.</b>\n\n"
             "Eu vou te ajudar a lançar as horas complementares por aqui.\n"
             "Você escolhe a categoria e eu peço só o dado que essa regra realmente precisa."
         )
 
     def _abrir_fluxo_nova_atividade(self, usuario: Usuario) -> str:
+        self._descartar_rascunho_temporario(usuario)
         usuario.bot_state = EstadoBot.AGUARDANDO_CATEGORIA.value
         usuario.active_submission_id = None
         self.db.commit()
         return (
+            "<b>Nova atividade</b>\n\n"
             "Beleza. Primeiro escolhe a categoria.\n\n"
-            "Dica rápida:\n"
-            "• Se você foi a uma palestra, seminário, congresso, simpósio, feira ou evento parecido como participante, "
+            "<b>Dica rápida</b>\n"
+            "- Se você foi a uma palestra, seminário, congresso, simpósio, feira ou evento parecido como participante, "
             "normalmente é Ouvinte em Eventos.\n"
-            "• Se você apresentou trabalho no evento, aí costuma ser Apresentação de Trabalhos."
+            "- Se você apresentou trabalho no evento, aí costuma ser Apresentação de Trabalhos."
         )
 
     def _lidar_com_categoria_por_botao(self, usuario: Usuario, codigo_categoria: str) -> str:
@@ -207,6 +222,7 @@ class ServicoTelegram:
         if not categoria:
             return "Não achei essa categoria. Toca em Nova atividade de novo."
 
+        self._descartar_rascunho_temporario(usuario)
         submissao = self.servico_submissoes.criar_submissao(
             SubmissaoCriacao(
                 user_id=usuario.id,
@@ -220,17 +236,13 @@ class ServicoTelegram:
         self.db.commit()
         regra = self._pegar_regra_principal(submissao.category_id)
         explicacao = self._explicacao_categoria(categoria.code)
-        linha_regra = f"Como essa categoria funciona: {self._resumo_regra(regra)}." if regra else ""
-        return "\n".join(
-            parte
-            for parte in [
-                f"Categoria escolhida: {categoria.name}.",
-                explicacao,
-                linha_regra,
-                "Agora me manda o título da atividade.",
-            ]
-            if parte
-        )
+        blocos = [
+            f"<b>Categoria escolhida:</b> {self._esc(categoria.name)}.",
+            explicacao,
+            self._bloco_regra_detalhada(regra),
+            "<b>Próximo passo</b>\nAgora me manda o título da atividade.",
+        ]
+        return "\n\n".join(parte for parte in blocos if parte)
 
     def _selecionar_atividade_por_botao(self, usuario: Usuario, submissao_id: str) -> str:
         if not submissao_id.isdigit():
@@ -243,13 +255,7 @@ class ServicoTelegram:
         usuario.active_submission_id = submissao.id
         usuario.bot_state = EstadoBot.PARADO.value
         self.db.commit()
-        return (
-            f"Atividade aberta: #{submissao.id} - {submissao.title}\n"
-            f"Categoria: {submissao.category_name or 'Sem categoria'}\n"
-            f"Status: {self._rotulo_status(submissao.status)}\n"
-            f"Horas estimadas: {self._formatar_horas(submissao.estimated_hours)}\n"
-            "Se precisar corrigir arquivo, toca em Ver comprovantes."
-        )
+        return self._mensagem_detalhe_atividade(submissao)
 
     def _guardar_titulo(self, usuario: Usuario, texto: str) -> str:
         if not texto:
@@ -299,7 +305,7 @@ class ServicoTelegram:
 
         usuario.bot_state = EstadoBot.AGUARDANDO_COMPROVANTE.value
         self.db.commit()
-        return "Perfeito. Agora me manda o comprovante em PDF ou imagem."
+        return "<b>Valor registrado.</b>\n\nAgora me manda o comprovante em PDF ou imagem."
 
     def _lidar_com_midias(self, usuario: Usuario, mensagem: dict) -> str:
         submissao = self._pegar_submissao_selecionada(usuario)
@@ -356,11 +362,25 @@ class ServicoTelegram:
 
         comprovantes = submissao.evidence_files
         if not comprovantes:
-            return "Ainda não tem comprovante anexado nessa atividade.", self._acoes_submissao_inline(usuario)
+            return (
+                "\n\n".join(
+                    [
+                        f"<b>Comprovantes da atividade #{submissao.id}</b>",
+                        f"Atividade: {self._esc(submissao.title)}",
+                        "Ainda não tem comprovante anexado nessa atividade.\n"
+                        "Se isso foi só um teste, você pode excluir a atividade no botão abaixo.",
+                    ]
+                ),
+                self._acoes_submissao_inline(usuario),
+            )
 
-        linhas = [f"Comprovantes da atividade #{submissao.id} - {submissao.title}:"]
+        linhas = [
+            f"<b>Comprovantes da atividade #{submissao.id}</b>",
+            f"Atividade: {self._esc(submissao.title)}",
+            "",
+        ]
         for comprovante in comprovantes:
-            linhas.append(f"- {comprovante.id}: {comprovante.original_filename}")
+            linhas.append(f"- {comprovante.id}: {self._esc(comprovante.original_filename)}")
         linhas.append("Toca no botão do arquivo que eu removo na hora.")
         return "\n".join(linhas), self._teclado_comprovantes(submissao.id, comprovantes)
 
@@ -376,6 +396,59 @@ class ServicoTelegram:
             incluir_regra=False,
             incluir_nota=True,
         )
+
+    def _pedir_confirmacao_exclusao(self, usuario: Usuario, submissao_id: int) -> tuple[str, dict | None]:
+        submissao = self.servico_submissoes.pegar_submissao(submissao_id)
+        if not submissao or submissao.user_id != usuario.id:
+            return "Não achei essa atividade.", self._acoes_submissao_inline(usuario)
+
+        quantidade_comprovantes = len(submissao.evidence_files)
+        blocos = [
+            "<b>Confirmar exclusão</b>",
+            "\n".join(
+                [
+                    f"Atividade: #{submissao.id} - {self._esc(submissao.title)}",
+                    f"Categoria: {self._esc(submissao.category_name or 'Sem categoria')}",
+                    f"Status: {self._esc(self._rotulo_status(submissao.status))}",
+                    f"Comprovantes anexados: {quantidade_comprovantes}",
+                ]
+            ),
+            "Essa ação remove a submissão da sua lista.\n"
+            "Comprovantes que estiverem só nessa atividade também serão apagados.",
+            "Se for isso mesmo, toca em <b>Sim, excluir</b>.",
+        ]
+        return "\n\n".join(blocos), self._teclado_confirmar_exclusao(submissao.id)
+
+    def _excluir_submissao_por_botao(self, usuario: Usuario, submissao_id: int) -> tuple[str, dict | None]:
+        submissao = self.servico_submissoes.pegar_submissao(submissao_id)
+        if not submissao or submissao.user_id != usuario.id:
+            return "Não achei essa atividade.", None
+
+        titulo = submissao.title
+        categoria = submissao.category_name or "Sem categoria"
+        quantidade_comprovantes = len(submissao.evidence_files)
+        self.servico_submissoes.remover_submissao(submissao_id)
+
+        usuario = self.repositorio_usuarios.pegar(usuario.id) or usuario
+        restantes = self.servico_submissoes.listar_submissoes_do_usuario(usuario.id)
+        usuario.bot_state = EstadoBot.PARADO.value
+        usuario.active_submission_id = restantes[0].id if restantes else None
+        self.db.commit()
+
+        linhas = [
+            "<b>Atividade removida.</b>",
+            "",
+            f"Atividade: #{submissao_id} - {self._esc(titulo)}",
+            f"Categoria: {self._esc(categoria)}",
+        ]
+        if quantidade_comprovantes:
+            linhas.append(f"Comprovantes desvinculados: {quantidade_comprovantes}")
+        linhas.append("")
+        if restantes:
+            linhas.append("Se quiser, toca em Minhas atividades para abrir outra.")
+        else:
+            linhas.append("Você não tem mais atividades cadastradas.")
+        return "\n".join(linhas), None
 
     def _finalizar_submissao(self, usuario: Usuario) -> str:
         if not usuario.active_submission_id:
@@ -402,6 +475,7 @@ class ServicoTelegram:
         )
 
     def _cancelar_fluxo(self, usuario: Usuario) -> str:
+        self._descartar_rascunho_temporario(usuario)
         usuario.bot_state = EstadoBot.PARADO.value
         usuario.active_submission_id = None
         self.db.commit()
@@ -416,33 +490,46 @@ class ServicoTelegram:
         usuario.bot_state = EstadoBot.PARADO.value
         self.db.commit()
 
-        linhas = ["Suas atividades:"]
+        blocos = ["<b>Suas atividades</b>"]
         for submissao in submissoes[:10]:
             estimativa = self._formatar_horas(submissao.estimated_hours)
-            linhas.append(
-                f"- #{submissao.id} {submissao.title} | {submissao.category_name or 'Sem categoria'} | "
-                f"{self._rotulo_status(submissao.status)} | {estimativa}"
+            blocos.append(
+                "\n".join(
+                    [
+                        f"#{submissao.id} - {self._esc(submissao.title)}",
+                        f"Categoria: {self._esc(submissao.category_name or 'Sem categoria')}",
+                        f"Status: {self._esc(self._rotulo_status(submissao.status))} | Horas estimadas: {estimativa}",
+                    ]
+                )
             )
-        linhas.append("Toca em um botão abaixo para abrir uma atividade.")
-        return "\n".join(linhas), self._teclado_atividades(submissoes[:10])
+        blocos.append("Toca em um botão abaixo para abrir uma atividade, ver comprovantes ou excluir.")
+        return "\n\n".join(blocos), self._teclado_atividades(submissoes[:10])
 
     def _resumo(self, usuario_id: int) -> str:
         resumo = self.servico_usuarios.pegar_resumo(usuario_id)
         linhas = [
+            "<b>Resumo</b>",
+            "",
             f"Você tem {self._formatar_horas(resumo.total_estimated_hours)} estimadas.",
             f"A meta oficial é {self._formatar_horas(resumo.required_hours)}.",
             f"Ainda faltam {self._formatar_horas(resumo.remaining_hours)}.",
         ]
-        linhas.extend(f"- {categoria.category_name}: {self._formatar_horas(categoria.total_hours)}" for categoria in resumo.categories)
+        if resumo.categories:
+            linhas.append("")
+            linhas.append("<b>Por categoria</b>")
+            linhas.extend(
+                f"- {self._esc(categoria.category_name)}: {self._formatar_horas(categoria.total_hours)}"
+                for categoria in resumo.categories
+            )
         return "\n".join(linhas)
 
     def _regras(self) -> str:
         regras = self.repositorio_regras.list_all()
         if not regras:
             return "Ainda não tem regra cadastrada."
-        linhas = ["Regras oficiais carregadas:"]
+        linhas = ["<b>Regras oficiais carregadas</b>", ""]
         for regra in regras:
-            linhas.append(f"- {regra.category.name}: {self._resumo_regra(regra)}")
+            linhas.append(f"- {self._esc(regra.category.name)}: {self._resumo_regra(regra)}")
         return "\n".join(linhas)
 
     def _pegar_regra_principal(self, categoria_id: int | None) -> Regra | None:
@@ -490,6 +577,8 @@ class ServicoTelegram:
             [{"text": f"Remover {comprovante.original_filename}", "callback_data": f"remover:{submissao_id}:{comprovante.id}"}]
             for comprovante in comprovantes
         ]
+        linhas.append([{"text": "Voltar para atividade", "callback_data": f"atividade:{submissao_id}"}])
+        linhas.append([{"text": "Excluir atividade", "callback_data": f"confirmar_exclusao:{submissao_id}"}])
         linhas.append([{"text": "Finalizar envio", "callback_data": "finalizar_envio"}])
         return {"inline_keyboard": linhas}
 
@@ -545,11 +634,21 @@ class ServicoTelegram:
         if not submissao:
             return None
         linhas = [[{"text": "Ver comprovantes", "callback_data": "ver_comprovantes"}]]
+        linhas.append([{"text": "Excluir atividade", "callback_data": f"confirmar_exclusao:{submissao.id}"}])
         if usuario.bot_state == EstadoBot.AGUARDANDO_COMPROVANTE.value:
             linhas.append([{"text": "Finalizar envio", "callback_data": "finalizar_envio"}])
         else:
             linhas.append([{"text": "Nova atividade", "callback_data": "nova_atividade"}])
         return {"inline_keyboard": linhas}
+
+    @staticmethod
+    def _teclado_confirmar_exclusao(submissao_id: int) -> dict:
+        return {
+            "inline_keyboard": [
+                [{"text": "Sim, excluir", "callback_data": f"excluir_atividade:{submissao_id}"}],
+                [{"text": "Cancelar", "callback_data": f"atividade:{submissao_id}"}],
+            ]
+        }
 
     @staticmethod
     def _extrair_dados_arquivo(mensagem: dict) -> tuple[str, str, str]:
@@ -582,80 +681,201 @@ class ServicoTelegram:
         if not regra:
             return "Agora me manda o número que essa atividade precisa."
 
+        bloco_regra = self._bloco_regra_detalhada(regra)
         if submissao.category_code == "OUVINTE_EVENTOS":
-            return (
-                f"Perfeito. Nessa categoria eu conto por evento: {self._resumo_regra(regra)}.\n"
-                "Agora me diz: esse comprovante cobre quantos eventos como ouvinte?\n"
-                "Se foi uma palestra ou um evento só, normalmente a resposta é 1."
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por evento.",
+                    bloco_regra,
+                    "Agora me diz: esse comprovante cobre quantos eventos como ouvinte?",
+                    "Se foi uma palestra ou um evento só, normalmente a resposta é 1.",
+                ]
             )
         if submissao.category_code == "APRESENTACAO_EVENTOS":
-            return (
-                f"Perfeito. Nessa categoria eu conto por apresentação: {self._resumo_regra(regra)}.\n"
-                "Agora me diz: esse comprovante cobre quantas apresentações?"
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por apresentação.",
+                    bloco_regra,
+                    "Agora me diz: esse comprovante cobre quantas apresentações?",
+                ]
             )
         if submissao.category_code == "COMPETICOES":
-            return (
-                f"Perfeito. Nessa categoria eu conto por etapa: {self._resumo_regra(regra)}.\n"
-                "Agora me diz: esse comprovante cobre quantas etapas da competição?"
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por etapa.",
+                    bloco_regra,
+                    "Agora me diz: esse comprovante cobre quantas etapas da competição?",
+                ]
             )
         if submissao.category_code == "PREMIACOES":
-            return (
-                f"Perfeito. Nessa categoria eu conto por premiação: {self._resumo_regra(regra)}.\n"
-                "Agora me diz: esse comprovante cobre quantas premiações ou menções?"
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por premiação.",
+                    bloco_regra,
+                    "Agora me diz: esse comprovante cobre quantas premiações ou menções?",
+                ]
             )
         if submissao.category_code == "ORGANIZACAO_EVENTOS":
-            return (
-                f"Perfeito. Nessa categoria eu conto por evento organizado: {self._resumo_regra(regra)}.\n"
-                "Agora me diz: esse comprovante cobre quantos eventos?"
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por evento organizado.",
+                    bloco_regra,
+                    "Agora me diz: esse comprovante cobre quantos eventos?",
+                ]
             )
         if submissao.category_code == "MESARIO":
-            return (
-                f"Perfeito. Nessa categoria eu conto por dia de atuação: {self._resumo_regra(regra)}.\n"
-                "Agora me diz: esse comprovante cobre quantos dias como mesário?"
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por dia de atuação.",
+                    bloco_regra,
+                    "Agora me diz: esse comprovante cobre quantos dias como mesário?",
+                ]
             )
         if submissao.category_code == "CURSOS_CC_EXTERNOS":
-            return (
-                f"Perfeito. Nessa categoria eu uso a carga horária do curso e aproveito 50%: {self._resumo_regra(regra)}.\n"
-                "Agora me manda a carga horária total do curso. Pode ser 20, 40, 60 ou 40h."
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu uso a carga horária do curso e aproveito 50%.",
+                    bloco_regra,
+                    "Agora me manda a carga horária total do curso. Pode ser 20, 40, 60 ou 40h.",
+                ]
             )
         if submissao.category_code == "CURSOS_IDIOMAS":
-            return (
-                f"Perfeito. Nessa categoria eu conto por semestre: {self._resumo_regra(regra)}.\n"
-                "Agora me diz quantos semestres esse comprovante cobre."
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por semestre.",
+                    bloco_regra,
+                    "Agora me diz quantos semestres esse comprovante cobre.",
+                ]
             )
 
         if regra.rule_type in {TipoRegra.PERCENTUAL_DAS_HORAS, TipoRegra.HORAS_DECLARADAS}:
-            return (
-                f"Perfeito. Nessa categoria eu uso a carga horária do certificado: {self._resumo_regra(regra)}.\n"
-                "Agora me manda a carga horária total. Pode ser 10, 10.5 ou 10h."
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu uso a carga horária do certificado.",
+                    bloco_regra,
+                    "Agora me manda a carga horária total. Pode ser 10, 10.5 ou 10h.",
+                ]
             )
 
         if regra.quantity_unit == UnidadeQuantidade.MES:
-            return f"Perfeito. Nessa categoria eu conto por mês: {self._resumo_regra(regra)}.\nAgora me diz quantos meses esse comprovante cobre."
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por mês.",
+                    bloco_regra,
+                    "Agora me diz quantos meses esse comprovante cobre.",
+                ]
+            )
         if regra.quantity_unit == UnidadeQuantidade.SEMESTRE:
-            return f"Perfeito. Nessa categoria eu conto por semestre: {self._resumo_regra(regra)}.\nAgora me diz quantos semestres esse comprovante cobre."
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por semestre.",
+                    bloco_regra,
+                    "Agora me diz quantos semestres esse comprovante cobre.",
+                ]
+            )
         if regra.quantity_unit == UnidadeQuantidade.EVENTO:
-            return f"Perfeito. Nessa categoria eu conto por evento: {self._resumo_regra(regra)}.\nAgora me diz quantos eventos esse comprovante cobre."
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por evento.",
+                    bloco_regra,
+                    "Agora me diz quantos eventos esse comprovante cobre.",
+                ]
+            )
         if regra.quantity_unit == UnidadeQuantidade.APRESENTACAO:
-            return f"Perfeito. Nessa categoria eu conto por apresentação: {self._resumo_regra(regra)}.\nAgora me diz quantas apresentações esse comprovante cobre."
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por apresentação.",
+                    bloco_regra,
+                    "Agora me diz quantas apresentações esse comprovante cobre.",
+                ]
+            )
         if regra.quantity_unit == UnidadeQuantidade.ETAPA:
-            return f"Perfeito. Nessa categoria eu conto por etapa: {self._resumo_regra(regra)}.\nAgora me diz quantas etapas esse comprovante cobre."
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por etapa.",
+                    bloco_regra,
+                    "Agora me diz quantas etapas esse comprovante cobre.",
+                ]
+            )
         if regra.quantity_unit == UnidadeQuantidade.PREMIACAO:
-            return f"Perfeito. Nessa categoria eu conto por premiação: {self._resumo_regra(regra)}.\nAgora me diz quantas premiações esse comprovante cobre."
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por premiação.",
+                    bloco_regra,
+                    "Agora me diz quantas premiações esse comprovante cobre.",
+                ]
+            )
         if regra.quantity_unit == UnidadeQuantidade.DIA:
-            return f"Perfeito. Nessa categoria eu conto por dia: {self._resumo_regra(regra)}.\nAgora me diz quantos dias esse comprovante cobre."
+            return "\n\n".join(
+                [
+                    "<b>Título salvo.</b>",
+                    "Nessa categoria eu conto por dia.",
+                    bloco_regra,
+                    "Agora me diz quantos dias esse comprovante cobre.",
+                ]
+            )
 
-        return f"Perfeito. Nessa categoria a regra é: {self._resumo_regra(regra)}.\nAgora me manda o número que essa atividade precisa."
+        return "\n\n".join(
+            [
+                "<b>Título salvo.</b>",
+                "Nessa categoria a regra é esta:",
+                bloco_regra,
+                "Agora me manda o número que essa atividade precisa.",
+            ]
+        )
 
     def _texto_erro_unidade(self, regra: Regra) -> str:
         return {
-            UnidadeQuantidade.MES: "Para essa categoria eu não uso horas. A regra do IC conta por mês. Me diz quantos meses foram.",
-            UnidadeQuantidade.EVENTO: "Para essa categoria eu não uso horas do evento. A regra do IC conta por evento. Me diz quantos eventos foram.",
-            UnidadeQuantidade.APRESENTACAO: "Para essa categoria eu não uso horas. A regra do IC conta por apresentação. Me diz quantas apresentações foram.",
-            UnidadeQuantidade.ETAPA: "Para essa categoria eu não uso horas. A regra do IC conta por etapa. Me diz quantas etapas foram.",
-            UnidadeQuantidade.PREMIACAO: "Para essa categoria eu não uso horas. A regra do IC conta por premiação. Me diz quantas premiações foram.",
-            UnidadeQuantidade.DIA: "Para essa categoria eu não uso horas. A regra do IC conta por dia. Me diz quantos dias foram.",
-            UnidadeQuantidade.SEMESTRE: "Para essa categoria eu não uso horas. A regra do IC conta por semestre. Me diz quantos semestres foram.",
+            UnidadeQuantidade.MES: (
+                "Para essa categoria eu não uso horas. A regra do IC conta por mês.\n"
+                f"Cada mês vale {self._formatar_horas_humanas(regra.hours_per_unit or 0)}.\n"
+                "Me diz quantos meses foram."
+            ),
+            UnidadeQuantidade.EVENTO: (
+                "Para essa categoria eu não uso horas do evento. A regra do IC conta por evento.\n"
+                f"Cada evento vale {self._formatar_horas_humanas(regra.hours_per_unit or 0)}.\n"
+                "Me diz quantos eventos foram."
+            ),
+            UnidadeQuantidade.APRESENTACAO: (
+                "Para essa categoria eu não uso horas. A regra do IC conta por apresentação.\n"
+                f"Cada apresentação vale {self._formatar_horas_humanas(regra.hours_per_unit or 0)}.\n"
+                "Me diz quantas apresentações foram."
+            ),
+            UnidadeQuantidade.ETAPA: (
+                "Para essa categoria eu não uso horas. A regra do IC conta por etapa.\n"
+                f"Cada etapa vale {self._formatar_horas_humanas(regra.hours_per_unit or 0)}.\n"
+                "Me diz quantas etapas foram."
+            ),
+            UnidadeQuantidade.PREMIACAO: (
+                "Para essa categoria eu não uso horas. A regra do IC conta por premiação.\n"
+                f"Cada premiação vale {self._formatar_horas_humanas(regra.hours_per_unit or 0)}.\n"
+                "Me diz quantas premiações foram."
+            ),
+            UnidadeQuantidade.DIA: (
+                "Para essa categoria eu não uso horas. A regra do IC conta por dia.\n"
+                f"Cada dia vale {self._formatar_horas_humanas(regra.hours_per_unit or 0)}.\n"
+                "Me diz quantos dias foram."
+            ),
+            UnidadeQuantidade.SEMESTRE: (
+                "Para essa categoria eu não uso horas. A regra do IC conta por semestre.\n"
+                f"Cada semestre vale {self._formatar_horas_humanas(regra.hours_per_unit or 0)}.\n"
+                "Me diz quantos semestres foram."
+            ),
             UnidadeQuantidade.CURSO: "Para essa categoria eu não uso horas diretamente nesse campo. Me diz quantos cursos quer lançar.",
         }.get(regra.quantity_unit, "Para essa categoria eu não uso horas nesse campo. Me manda o número que a regra pede.")
 
@@ -675,6 +895,142 @@ class ServicoTelegram:
             return "sem estimativa"
         return f"{valor:.2f}h".replace(".", ",")
 
+    @staticmethod
+    def _esc(valor: object) -> str:
+        return html.escape(str(valor))
+
+    @staticmethod
+    def _formatar_numero_curto(valor: float) -> str:
+        if float(valor).is_integer():
+            return str(int(valor))
+        return f"{valor:.2f}".rstrip("0").rstrip(".").replace(".", ",")
+
+    def _formatar_horas_humanas(self, valor: float) -> str:
+        return f"{self._formatar_numero_curto(valor)}h"
+
+    def _rotulo_unidade_extenso(self, regra: Regra, quantidade: float) -> str:
+        singular_plural = {
+            UnidadeQuantidade.MES: ("mês", "meses"),
+            UnidadeQuantidade.EVENTO: ("evento", "eventos"),
+            UnidadeQuantidade.APRESENTACAO: ("apresentação", "apresentações"),
+            UnidadeQuantidade.ETAPA: ("etapa", "etapas"),
+            UnidadeQuantidade.PREMIACAO: ("premiação", "premiações"),
+            UnidadeQuantidade.DIA: ("dia", "dias"),
+            UnidadeQuantidade.SEMESTRE: ("semestre", "semestres"),
+            UnidadeQuantidade.CURSO: ("curso", "cursos"),
+        }
+        singular, plural = singular_plural.get(regra.quantity_unit, ("unidade", "unidades"))
+        return singular if abs(quantidade - 1) < 1e-9 else plural
+
+    def _exemplo_regra_por_unidade(self, regra: Regra) -> str | None:
+        if regra.hours_per_unit is None:
+            return None
+
+        exemplos: list[str] = []
+        quantidade_base = regra.minimum_quantity or 1
+        horas_base = quantidade_base * regra.hours_per_unit
+        if regra.max_hours_per_category is not None:
+            horas_base = min(horas_base, regra.max_hours_per_category)
+        exemplos.append(
+            f"{self._formatar_numero_curto(quantidade_base)} {self._rotulo_unidade_extenso(regra, quantidade_base)} = "
+            f"{self._formatar_horas_humanas(horas_base)}"
+        )
+
+        if regra.max_hours_per_category is None or regra.hours_per_unit <= 0:
+            return exemplos[0]
+
+        quantidade_teto = regra.max_hours_per_category / regra.hours_per_unit
+        if abs(quantidade_teto - round(quantidade_teto)) > 1e-9:
+            return exemplos[0]
+
+        quantidade_teto = round(quantidade_teto)
+        if quantidade_teto > quantidade_base:
+            exemplos.append(
+                f"{self._formatar_numero_curto(quantidade_teto)} {self._rotulo_unidade_extenso(regra, quantidade_teto)} = "
+                f"{self._formatar_horas_humanas(regra.max_hours_per_category)}"
+            )
+
+        return "; ".join(exemplos)
+
+    def _bloco_regra_detalhada(self, regra: Regra | None) -> str:
+        if not regra:
+            return ""
+
+        linhas = ["<b>Como essa categoria funciona:</b>"]
+        if regra.rule_type == TipoRegra.POR_UNIDADE and regra.hours_per_unit is not None:
+            linhas.append(
+                f"- Cada {self._rotulo_unidade_extenso(regra, 1)} vale {self._formatar_horas_humanas(regra.hours_per_unit)}."
+            )
+            if regra.minimum_quantity is not None:
+                linhas.append(
+                    f"- O mínimo aceito é {self._formatar_numero_curto(regra.minimum_quantity)} "
+                    f"{self._rotulo_unidade_extenso(regra, regra.minimum_quantity)}."
+                )
+            if regra.max_hours_per_category is not None:
+                linhas.append(
+                    f"- Você pode acumular no máximo {self._formatar_horas_humanas(regra.max_hours_per_category)} "
+                    "nessa categoria."
+                )
+            exemplo = self._exemplo_regra_por_unidade(regra)
+            if exemplo:
+                linhas.append(f"- Exemplo: {exemplo}.")
+            return "\n".join(linhas)
+
+        if regra.rule_type == TipoRegra.PERCENTUAL_DAS_HORAS and regra.percentage_multiplier is not None:
+            percentual = self._formatar_numero_curto(regra.percentage_multiplier * 100)
+            linhas.append(f"- Eu aproveito {percentual}% da carga horária informada no certificado.")
+            if regra.max_hours_per_category is not None:
+                linhas.append(
+                    f"- Você pode acumular no máximo {self._formatar_horas_humanas(regra.max_hours_per_category)} "
+                    "nessa categoria."
+                )
+            horas_exemplo = 40
+            horas_aproveitadas = horas_exemplo * regra.percentage_multiplier
+            if regra.max_hours_per_category is not None:
+                horas_aproveitadas = min(horas_aproveitadas, regra.max_hours_per_category)
+            linhas.append(
+                f"- Exemplo: certificado de {horas_exemplo}h gera {self._formatar_horas_humanas(horas_aproveitadas)} "
+                "aproveitadas."
+            )
+            return "\n".join(linhas)
+
+        if regra.rule_type == TipoRegra.HORAS_DECLARADAS:
+            linhas.append("- Eu aproveito a carga horária informada no certificado.")
+            if regra.max_hours_per_category is not None:
+                linhas.append(
+                    f"- Você pode acumular no máximo {self._formatar_horas_humanas(regra.max_hours_per_category)} "
+                    "nessa categoria."
+                )
+            linhas.append("- Exemplo: certificado de 12h gera 12h aproveitadas.")
+            return "\n".join(linhas)
+
+        if regra.rule_type == TipoRegra.HORAS_FIXAS and regra.fixed_hours is not None:
+            linhas.append(f"- Cada atividade dessa categoria vale {self._formatar_horas_humanas(regra.fixed_hours)} fixas.")
+            if regra.max_hours_per_category is not None:
+                linhas.append(
+                    f"- Você pode acumular no máximo {self._formatar_horas_humanas(regra.max_hours_per_category)} "
+                    "nessa categoria."
+                )
+            return "\n".join(linhas)
+
+        linhas.append(f"- {self._esc(regra.short_description)}")
+        return "\n".join(linhas)
+
+    def _mensagem_detalhe_atividade(self, submissao: Submissao) -> str:
+        quantidade_comprovantes = len(submissao.evidence_files)
+        linhas = [
+            "<b>Atividade aberta</b>",
+            "",
+            f"Atividade: #{submissao.id} - {self._esc(submissao.title)}",
+            f"Categoria: {self._esc(submissao.category_name or 'Sem categoria')}",
+            f"Status: {self._esc(self._rotulo_status(submissao.status))}",
+            f"Horas estimadas: {self._formatar_horas(submissao.estimated_hours)}",
+            f"Comprovantes anexados: {quantidade_comprovantes}",
+            "",
+            "Use os botões abaixo para ver comprovantes, excluir a atividade ou criar outra.",
+        ]
+        return "\n".join(linhas)
+
     def _mensagem_resumo_submissao(
         self,
         submissao: Submissao,
@@ -683,24 +1039,27 @@ class ServicoTelegram:
         incluir_regra: bool,
         incluir_nota: bool,
     ) -> str:
-        linhas = [
-            cabecalho,
-            "",
-            f"Atividade: #{submissao.id} - {submissao.title}",
-            f"Categoria: {submissao.category_name or 'Sem categoria'}",
-            f"Status: {self._rotulo_status(submissao.status)}",
-            f"Valor informado: {self._resumo_valor_informado(submissao)}",
-            f"Horas estimadas: {self._formatar_horas(submissao.estimated_hours)}",
+        blocos = [
+            "\n".join(
+                [
+                    f"<b>{self._esc(cabecalho)}</b>",
+                    "",
+                    f"Atividade: #{submissao.id} - {self._esc(submissao.title)}",
+                    f"Categoria: {self._esc(submissao.category_name or 'Sem categoria')}",
+                    f"Status: {self._esc(self._rotulo_status(submissao.status))}",
+                    f"Valor informado: {self._esc(self._resumo_valor_informado(submissao))}",
+                    f"Horas estimadas: {self._formatar_horas(submissao.estimated_hours)}",
+                ]
+            )
         ]
         regra = self._pegar_regra_principal(submissao.category_id)
         if incluir_regra and regra:
-            linhas.append(f"Regra aplicada: {self._resumo_regra(regra)}")
+            blocos.append(self._bloco_regra_detalhada(regra))
         if incluir_nota and submissao.review_notes:
-            linhas.append(f"Observação: {submissao.review_notes}")
+            blocos.append(f"<b>Observação</b>\n{self._esc(submissao.review_notes)}")
         if submissao.evidence_files:
-            linhas.append("")
-            linhas.append("Se esse não era o comprovante certo, toca em Ver comprovantes para remover.")
-        return "\n".join(linhas)
+            blocos.append("Se esse não era o comprovante certo, toca em Ver comprovantes para remover.")
+        return "\n\n".join(blocos)
 
     def _resumo_regra(self, regra: Regra) -> str:
         partes: list[str] = []
@@ -743,7 +1102,30 @@ class ServicoTelegram:
             return "não informado"
         if not regra or regra.quantity_unit is None:
             return f"{submissao.declared_quantity:g} unidade(s)"
-        return f"{submissao.declared_quantity:g} {self._rotulo_unidade_curta(regra)}(s)"
+        return (
+            f"{self._formatar_numero_curto(submissao.declared_quantity)} "
+            f"{self._rotulo_unidade_extenso(regra, submissao.declared_quantity)}"
+        )
+
+    def _descartar_rascunho_temporario(self, usuario: Usuario) -> None:
+        if usuario.bot_state != EstadoBot.AGUARDANDO_TITULO.value or not usuario.active_submission_id:
+            return
+
+        submissao = self.servico_submissoes.pegar_submissao(usuario.active_submission_id)
+        if not submissao or submissao.user_id != usuario.id:
+            return
+
+        titulo_placeholder = f"Submissao {submissao.category_name}" if submissao.category_name else None
+        if submissao.status != StatusSubmissao.RASCUNHO:
+            return
+        if submissao.declared_quantity is not None or submissao.declared_hours is not None:
+            return
+        if submissao.evidence_files:
+            return
+        if titulo_placeholder and submissao.title != titulo_placeholder:
+            return
+
+        self.servico_submissoes.remover_submissao(submissao.id)
 
     def _pegar_submissao_selecionada(self, usuario: Usuario) -> Submissao | None:
         if usuario.active_submission_id:
@@ -757,13 +1139,13 @@ class ServicoTelegram:
     @staticmethod
     def _texto_ajuda_categorias() -> str:
         return (
-            "Como escolher a categoria:\n"
-            "• Palestra, seminário, colóquio, simpósio, congresso, feira, SIAC ou JIC em que você participou como ouvinte: "
+            "<b>Como escolher a categoria</b>\n"
+            "- Palestra, seminário, colóquio, simpósio, congresso, feira, SIAC ou JIC em que você participou como ouvinte: "
             "Ouvinte em Eventos.\n"
-            "• Trabalho apresentado em evento: Apresentação de Trabalhos.\n"
-            "• Curso externo da área de computação: Cursos Externos de Ciência da Computação.\n"
-            "• Curso de idioma: Cursos de Idiomas.\n"
-            "• Estágio: Estágio.\n\n"
+            "- Trabalho apresentado em evento: Apresentação de Trabalhos.\n"
+            "- Curso externo da área de computação: Cursos Externos de Ciência da Computação.\n"
+            "- Curso de idioma: Cursos de Idiomas.\n"
+            "- Estágio: Estágio.\n\n"
             "Se ficar na dúvida, escolhe a categoria mais próxima e depois confere em Regras."
         )
 

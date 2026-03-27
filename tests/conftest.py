@@ -1,4 +1,5 @@
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,8 @@ from sqlalchemy.orm import sessionmaker
 
 os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 os.environ["STORAGE_DIR"] = "./test_storage"
+os.environ["STORAGE_BACKEND"] = "filesystem"
+os.environ["TELEGRAM_MODE"] = "webhook"
 
 from app.api.dependencias import db_session
 from app.db.base import Base
@@ -23,9 +26,11 @@ SessaoTesteLocal = sessionmaker(autocommit=False, autoflush=False, bind=motor_te
 def preparar_banco():
     Base.metadata.drop_all(bind=motor_teste)
     Base.metadata.create_all(bind=motor_teste)
+    shutil.rmtree("./test_storage", ignore_errors=True)
     Path("./test_storage").mkdir(exist_ok=True)
     yield
     Base.metadata.drop_all(bind=motor_teste)
+    shutil.rmtree("./test_storage", ignore_errors=True)
 
 
 @pytest.fixture

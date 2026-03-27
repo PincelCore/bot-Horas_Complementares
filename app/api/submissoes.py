@@ -40,3 +40,11 @@ def remover_comprovante(submission_id: int, evidence_id: int, db: Session = Depe
     except ErroDominio as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+
+@router.delete("/{submission_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remover_submissao(submission_id: int, db: Session = Depends(db_session)) -> None:
+    try:
+        ServicoSubmissoes(db).remover_submissao(submission_id)
+    except ErroDominio as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+

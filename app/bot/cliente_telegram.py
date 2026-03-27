@@ -19,7 +19,7 @@ class ClienteTelegram:
     def enviar_mensagem(self, chat_id: int, texto: str, marcacao: dict[str, Any] | None = None) -> None:
         if not self.ativo:
             return
-        carga = {"chat_id": chat_id, "text": texto}
+        carga = {"chat_id": chat_id, "text": texto, "parse_mode": "HTML"}
         if marcacao:
             carga["reply_markup"] = marcacao
         self._fazer_requisicao_json("sendMessage", carga)
@@ -72,6 +72,15 @@ class ClienteTelegram:
     def set_webhook(self) -> bool:
         return self.sincronizar_webhook()
 
+    def remover_webhook(self, descartar_updates_pendentes: bool = False) -> bool:
+        if not self.ativo:
+            return False
+        resultado = self._fazer_requisicao_json("deleteWebhook", {"drop_pending_updates": descartar_updates_pendentes})
+        return bool(resultado)
+
+    def delete_webhook(self, drop_pending_updates: bool = False) -> bool:
+        return self.remover_webhook(drop_pending_updates)
+
     def pegar_info_webhook(self) -> dict[str, Any]:
         if not self.ativo:
             raise ErroDominio("Token do Telegram nao configurado.")
@@ -79,6 +88,21 @@ class ClienteTelegram:
 
     def get_webhook_info(self) -> dict[str, Any]:
         return self.pegar_info_webhook()
+
+    def buscar_updates(self, *, offset: int | None = None, timeout: int | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+        if not self.ativo:
+            raise ErroDominio("Token do Telegram nao configurado.")
+        carga: dict[str, Any] = {}
+        if offset is not None:
+            carga["offset"] = offset
+        if timeout is not None:
+            carga["timeout"] = timeout
+        if limit is not None:
+            carga["limit"] = limit
+        return list(self._fazer_requisicao_json("getUpdates", carga) or [])
+
+    def get_updates(self, *, offset: int | None = None, timeout: int | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+        return self.buscar_updates(offset=offset, timeout=timeout, limit=limit)
 
     def _fazer_requisicao_json(self, metodo: str, carga: dict[str, Any]) -> Any:
         url_base = self.configuracoes.telegram_api_base_url.rstrip("/")

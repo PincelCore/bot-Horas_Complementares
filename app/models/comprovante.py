@@ -19,6 +19,7 @@ class Comprovante(CamposTempo, Base):
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
     file_content: Mapped[Optional[bytes]] = mapped_column(LargeBinary)
     extracted_text: Mapped[Optional[str]] = mapped_column(Text)
+    source_document_id: Mapped[Optional[int]] = mapped_column(ForeignKey("received_documents.id"))
 
     submissions = relationship("SubmissaoComprovante", back_populates="evidence", cascade="all, delete-orphan")
 
