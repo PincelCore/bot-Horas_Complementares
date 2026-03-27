@@ -4,7 +4,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0003_received_documents_and_storage_metadata"
+revision = "0003_received_docs"
 down_revision = "0002_file_content"
 branch_labels = None
 depends_on = None
@@ -29,17 +29,18 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     )
-    op.add_column("evidences", sa.Column("source_document_id", sa.Integer(), nullable=True))
-    op.create_foreign_key(
-        "fk_evidences_source_document_id",
-        "evidences",
-        "received_documents",
-        ["source_document_id"],
-        ["id"],
-    )
+    with op.batch_alter_table("evidences") as batch_op:
+        batch_op.add_column(sa.Column("source_document_id", sa.Integer(), nullable=True))
+        batch_op.create_foreign_key(
+            "fk_evidences_source_document_id",
+            "received_documents",
+            ["source_document_id"],
+            ["id"],
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_evidences_source_document_id", "evidences", type_="foreignkey")
-    op.drop_column("evidences", "source_document_id")
+    with op.batch_alter_table("evidences") as batch_op:
+        batch_op.drop_constraint("fk_evidences_source_document_id", type_="foreignkey")
+        batch_op.drop_column("source_document_id")
     op.drop_table("received_documents")
