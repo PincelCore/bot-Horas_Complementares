@@ -196,6 +196,9 @@ class ServicoSubmissoes:
             for comprovante in submissao.evidence_files
         ]
 
+        # Existing audit rows reference the submission via foreign key, so
+        # they must be detached before the submission itself can be removed.
+        self.repositorio_auditoria.desvincular_submissao(submissao_id)
         self.servico_documentos.desvincular_submissao(submissao_id)
         self.repositorio_submissoes.remover(submissao)
         self.db.flush()
@@ -213,7 +216,7 @@ class ServicoSubmissoes:
         self.repositorio_auditoria.registrar(
             "submissao.removida",
             f"Submissao {submissao_id} removida.",
-            submissao_id,
+            None,
         )
         self.db.commit()
 

@@ -1,3 +1,4 @@
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.models import EventoAuditoria
@@ -20,3 +21,10 @@ class RepositorioAuditoria:
 
     def log(self, event_type: str, message: str, submission_id: int | None = None) -> EventoAuditoria:
         return self.registrar(event_type, message, submission_id)
+
+    def desvincular_submissao(self, id_submissao: int) -> None:
+        self.db.execute(
+            update(EventoAuditoria)
+            .where(EventoAuditoria.submission_id == id_submissao)
+            .values(submission_id=None)
+        )

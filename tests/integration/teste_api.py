@@ -1,5 +1,9 @@
 from io import BytesIO
 
+from sqlalchemy import select
+
+from app.models import EventoAuditoria
+
 
 def pegar_categoria(cliente_api, codigo: str) -> dict:
     resposta = cliente_api.get("/categories")
@@ -132,7 +136,7 @@ def test_remover_comprovante_recalcula_submissao(client):
     assert resposta_remocao.json()["evidences"] == []
 
 
-def test_remover_submissao_apaga_registro_e_lista_do_usuario(client):
+def test_remover_submissao_apaga_registro_e_lista_do_usuario(client, db):
     resposta_usuario = client.post("/users", json={"full_name": "Davi"})
     usuario_id = resposta_usuario.json()["id"]
     categoria = pegar_categoria(client, "ESTAGIO")
@@ -160,6 +164,15 @@ def test_remover_submissao_apaga_registro_e_lista_do_usuario(client):
     assert resposta_remocao.status_code == 204
     assert client.get(f"/submissions/{submissao_id}").status_code == 404
     assert client.get(f"/users/{usuario_id}/submissions").json() == []
+
+    eventos = list(
+        db.scalars(
+            select(EventoAuditoria).where(EventoAuditoria.event_type.in_(["submissao.criada", "submissao.removida"]))
+        ).all()
+    )
+
+    assert any(evento.event_type == "submissao.removida" and evento.submission_id is None for evento in eventos)
+    assert not list(db.scalars(select(EventoAuditoria).where(EventoAuditoria.submission_id == submissao_id)).all())
 
 
 def test_rejeita_pdf_que_parece_documento_irrelevante(client):
